@@ -627,8 +627,9 @@ int main(int argc, char* argv[]) {
 			std::cout << "    Done in " << elapsed_time.count() << "s" << std::endl;
 
 			std::string img_name =
-				fs::path(images_paths[img_idx]).stem().string() + ".png";
-			cv::imwrite((fs::path(target_path) / img_name).c_str(), edges_map * 255.0);
+				fs::path(images_paths[img_idx]).stem().string() + ".bin";
+			DumpMatrix(edges_map, (fs::path(target_path) / img_name).c_str());
+//			cv::imwrite((fs::path(target_path) / img_name).c_str(), edges_map * 255.0);
 		}
 
 		std::cout << "=" << std::endl;
