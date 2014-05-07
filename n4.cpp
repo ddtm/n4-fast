@@ -76,20 +76,23 @@ nnforge::network_schema_smart_ptr GetSchema() {
 	return schema;
 }
 
-cv::Mat3f GetImage(const char *filename) {
+cv::Mat3f GetImage(const char *filename, float scale) {
 	cv::Mat img = cv::imread(filename);
 
 	// Convert image to the floating-point format.
 	img.convertTo(img, CV_32FC3, 1.0f / 255.0f);
 
-	// TODO: Subtract mean.
+	// Remove excessive pixel from the border. 321 x 481 -> 320 x 480 :).
+	img = img(cv::Range(0, img.rows - 1), cv::Range(0, img.cols - 1)).clone();
+
+	// Subtract mean.
 	img -= cv::Scalar(0.37162688, 0.44378472, 0.43420864);
 
-	// Pad image.
-	// Here we add 3 instead of 4 as input images have size of 321 x 481
-	// (not 320 x 240).
+	// Scale image.
+	cv::resize(img, img, cv::Size(), scale, scale);
 
-	cv::copyMakeBorder(img, img, 15, 15, 15 + 3, 15 + 3, cv::BORDER_REFLECT);
+	// Pad image.
+	cv::copyMakeBorder(img, img, 15, 15 + 4, 15, 15 + 4, cv::BORDER_REFLECT);
 
 	return img;
 }
@@ -416,9 +419,11 @@ int main(int argc, char* argv[]) {
 		//
 		po::options_description desc("Allowed options");
 		desc.add_options()
-			("device-id,d", po::value<int>(), "device index")
+			("device-id,d", po::value<int>()->default_value(0), "device index")
+			("process-dict-only", "process dictionary only")
 		    ("source-path,s", po::value<std::string>(), "path to input image/directory/list")
-			("target-path,t", po::value<std::string>(), "output directory");
+			("target-path,t", po::value<std::string>(), "output directory")
+			("scale", po::value<float>()->default_value(1.0f), "image scale");
 
 		po::variables_map vm;
 		po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -426,13 +431,10 @@ int main(int argc, char* argv[]) {
 
 		std::cout << "=" << std::endl;
 
-		int device_id;
-		if (vm.count("device-id")) {
-			device_id = vm["device-id"].as<int>();
-		} else {
-			device_id = 0;
-		}
+		int device_id = vm["device-id"].as<int>();
 		std::cout << "= Device ID: " << device_id << std::endl;
+
+		bool process_dict_only = vm.count("process-dict-only");
 
 		std::string source_path;
 		if (vm.count("source-path")) {
@@ -452,6 +454,9 @@ int main(int argc, char* argv[]) {
 			target_path = ".";
 		}
 		std::cout << "= Target path: " << target_path << std::endl;
+
+		float image_scale = vm["scale"].as<float>();
+		std::cout << "= Image scale: " << image_scale << std::endl;
 
 		std::cout << "=" << std::endl;
 
@@ -519,6 +524,10 @@ int main(int argc, char* argv[]) {
 		elapsed_time = boost::chrono::high_resolution_clock::now() - start;
 		std::cout << "    Done in " << elapsed_time.count() << "s" << std::endl;
 
+		if (process_dict_only) {
+			return 0;
+		}
+
 		for (int img_idx = 0; img_idx < images_paths.size(); ++img_idx) {
 			std::cout << "=== Processing image: " << images_paths[img_idx] << std::endl;
 			//
@@ -528,7 +537,7 @@ int main(int argc, char* argv[]) {
 			//
 			std::cout << "[*] Creating inputs..." << std::endl;
 
-			cv::Mat3f img = GetImage(images_paths[img_idx].c_str());
+			cv::Mat3f img = GetImage(images_paths[img_idx].c_str(), image_scale);
 			MakeLayerConfigurationForImage(img, input_configuration, output_configuration);
 
 			start = boost::chrono::high_resolution_clock::now();
