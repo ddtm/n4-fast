@@ -1,6 +1,7 @@
 from __future__ import print_function
 
 import os
+import argparse
 import struct
 import subprocess
 import multiprocessing as mp
@@ -18,8 +19,11 @@ def read_edges(filename):
 
         size = struct.unpack('II', bytes)
 
-        edges = np.fromfile(f, dtype=np.single)
+        edges = np.fromfile(f, dtype=np.single, count=(size[0] * size[1]))
         edges = edges.reshape(size)
+
+    # print('Max', edges.max())
+    # print('Min:', edges.min())
 
     return edges
 
@@ -32,6 +36,7 @@ def combine_maps(maps, output_size):
         path = t['path']
 
         edges = read_edges(path)
+
         edges = cv2.resize(edges, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
 
         add_border_y = max(output_size[0] - (edges.shape[0] + shift), 0)
@@ -89,9 +94,33 @@ class Worker(mp.Process):
         return
 
 if __name__ == '__main__':
-    images_base_path = '/home/yganin/Arbeit/Projects/NN/Segmentation/BSDS500/BSR/BSDS500/data/images/test'
-    images_list_path = '/home/yganin/Arbeit/Projects/NN/Segmentation/BSDS500/BSR/BSDS500/data/bsds500_test.txt'
-    target_path = './output'
+    parser = argparse.ArgumentParser(description='Run test stage of the N^4 algorithm.')
+    parser.add_argument('-b', '--images-basepath', dest='images_base_path')
+    parser.add_argument('-l', '--list-path', dest='images_list_path')
+    parser.add_argument('-t', '--target-path', dest='target_path')
+
+    args = parser.parse_args()
+
+    print(args)
+
+    if args.images_base_path:
+        images_base_path = args.images_base_path
+    else:
+        images_base_path = '/home/yganin/Arbeit/Projects/NN/Segmentation/BSDS500/BSR/BSDS500/data/images/test'
+
+    if images_base_path == 'BSDS500':
+        images_base_path = '/home/yganin/Arbeit/Projects/NN/Segmentation/BSDS500/BSR/BSDS500/data/images/test'
+
+    if args.images_list_path:
+        images_list_path = args.images_list_path
+    else:
+        images_list_path = '/home/yganin/Arbeit/Projects/NN/Segmentation/BSDS500/BSR/BSDS500/data/bsds500_test.txt'
+
+    if args.target_path:
+        target_path = args.target_path
+    else:
+        target_path = './output'
+
     num_jobs = 2
 
     device_ids = [0, 1]
@@ -123,7 +152,7 @@ if __name__ == '__main__':
 
     # Prepare images lists.
     images_list = [line.strip() for line in open(images_list_path)]
-    images_list = images_list[: 10]
+    # images_list = images_list[: 2]
     jobs_images_lists = [images_list[i :: num_jobs] for i in xrange(num_jobs)]
 
     jobs_images_lists_paths = []

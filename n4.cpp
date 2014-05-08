@@ -22,7 +22,7 @@ namespace fs = boost::filesystem;
 typedef std::vector< nnforge_shared_ptr<const std::vector<float> > > DataList;
 typedef nnforge_shared_ptr<cv::flann::Index> FLANNIndexPtr;
 
-const int kNumOutputMaps = 16;
+const int kNumOutputMaps = 256;
 const char *kDictAnnotationsPath = "./dict_annotations.bin";
 const char *KDictProcessedPatchesPath = "./dict_processed_patches.bin";
 const char *kDictPath = "./dict.bin";
@@ -174,16 +174,26 @@ void AssembleMaps(
 }
 
 cv::Mat1f CombinePatches(
-		const cv::Mat1i indices,
-		const std::vector<cv::Mat1f> &patches,
+		const std::vector<cv::Mat1f> &maps,
 		cv::Size output_size) {
 
-	int patch_size = patches[0].rows;
+	int map_total_pixels = maps[0].total();
+	int patch_total_pixels = maps.size();
+	int patch_size = (int) sqrt(patch_total_pixels);
 
 	cv::Mat1f output = cv::Mat1f::zeros(output_size.height + patch_size - 1,
 										output_size.width + patch_size - 1);
 	cv::Mat1f counts = cv::Mat1f::zeros(output_size.height + patch_size - 1,
 										output_size.width + patch_size - 1);
+
+	// Convert maps into features matrix.
+	cv::Mat1f features(cv::Size(maps.size(), map_total_pixels));
+	for (int map_idx = 0; map_idx < maps.size(); ++map_idx) {
+		maps[map_idx].reshape(0, map_total_pixels).copyTo(features.col(map_idx));
+	}
+
+	cv::exp(-features, features);
+	features = 1.0f / (1.0f + features);
 
 	int pixel_idx = 0;
 	for (int y = 0; y < output_size.height; ++y) {
@@ -196,7 +206,7 @@ cv::Mat1f CombinePatches(
 				cv::Range(y, y + patch_size),
 				cv::Range(x, x + patch_size));
 
-			const cv::Mat1f patch = patches[indices.at<int>(pixel_idx)];
+			const cv::Mat1f patch = features.row(pixel_idx).reshape(0, patch_size).t();
 
 			output_roi += patch;
 			counts_roi += 1.0f;
@@ -209,51 +219,10 @@ cv::Mat1f CombinePatches(
 	output = output(cv::Range(8, 8 + output_size.height),
 					cv::Range(8, 8 + output_size.width)).clone();
 
+	cv::Mat mask = cv::Mat(output != output);
+	output.setTo(0.0f, mask);
+
 	return output;
-}
-
-void LoadDictAnnotations(std::vector<cv::Mat1f> &annotations) {
-	const char *filename = kDictAnnotationsPath;
-
-	std::ifstream f(filename, std::istream::binary);
-
-	unsigned int num_annotations;
-	f.read(reinterpret_cast<char *>(&num_annotations), sizeof(num_annotations));
-
-	annotations.resize(num_annotations);
-
-	for (int annotation_idx = 0; annotation_idx < num_annotations; ++annotation_idx) {
-		std::vector<float> annotation_data(16 * 16);
-
-		f.read(reinterpret_cast<char *> (&annotation_data[0]),
-			   sizeof(float) * annotation_data.size());
-
-		annotations[annotation_idx] = cv::Mat(16, 16, CV_32FC1, &annotation_data[0]).clone();
-	}
-
-	f.close();
-}
-
-void LoadDictPatches(DataList &input_data_list) {
-	const char *filename = KDictProcessedPatchesPath;
-
-	std::ifstream f(filename, std::istream::binary);
-
-	unsigned int num_patches;
-	f.read(reinterpret_cast<char *>(&num_patches), sizeof(num_patches));
-
-	input_data_list.resize(num_patches);
-
-	for (int patch_idx = 0; patch_idx < num_patches; ++patch_idx) {
-		std::vector<float> &patch_data = *(new std::vector<float>(34 * 34 * 3));
-
-		f.read(reinterpret_cast<char *> (&patch_data[0]),
-			   sizeof(float) * patch_data.size());
-
-		input_data_list[patch_idx].reset(&patch_data);
-	}
-
-	f.close();
 }
 
 cv::Mat1f GetFeaturesMat(const std::vector<std::vector<float> > &features) {
@@ -295,21 +264,6 @@ nnforge::network_tester_smart_ptr SetupTester(int device_id) {
 	tester->set_data(data);
 
 	return tester;
-}
-
-void MakeLayerConfigurationForDict(
-		nnforge::layer_configuration_specific &input_configuration,
-		nnforge::layer_configuration_specific &output_configuration) {
-
-	input_configuration.feature_map_count = 3;
-	input_configuration.dimension_sizes.resize(2);
-	input_configuration.dimension_sizes[0] = 34;
-	input_configuration.dimension_sizes[1] = 34;
-
-	output_configuration.feature_map_count = kNumOutputMaps;
-	output_configuration.dimension_sizes.resize(2);
-	output_configuration.dimension_sizes[0] = 1;
-	output_configuration.dimension_sizes[1] = 1;
 }
 
 void MakeLayerConfigurationForImage(
@@ -364,16 +318,6 @@ cv::Mat1f ReadMatrix(const char *filename) {
 	return mat;
 }
 
-void DumpFilters(
-		nnforge::network_schema_smart_ptr schema,
-		nnforge::network_data_smart_ptr data) {
-
-	std::vector<nnforge::layer_data_configuration_list> layer_data_configuration_list_list =
-		schema->get_layer_data_configuration_list_list();
-
-	nnforge::snapshot_visualizer::save_ann_snapshot(*data, layer_data_configuration_list_list, "filters.png");
-}
-
 void GetImagesPaths(const std::string &root, std::vector<std::string> &images_paths) {
 	if (!fs::exists(root)) {
 		return;
@@ -420,7 +364,6 @@ int main(int argc, char* argv[]) {
 		po::options_description desc("Allowed options");
 		desc.add_options()
 			("device-id,d", po::value<int>()->default_value(0), "device index")
-			("process-dict-only", "process dictionary only")
 		    ("source-path,s", po::value<std::string>(), "path to input image/directory/list")
 			("target-path,t", po::value<std::string>(), "output directory")
 			("scale", po::value<float>()->default_value(1.0f), "image scale");
@@ -433,8 +376,6 @@ int main(int argc, char* argv[]) {
 
 		int device_id = vm["device-id"].as<int>();
 		std::cout << "= Device ID: " << device_id << std::endl;
-
-		bool process_dict_only = vm.count("process-dict-only");
 
 		std::string source_path;
 		if (vm.count("source-path")) {
@@ -476,57 +417,6 @@ int main(int argc, char* argv[]) {
 
 		elapsed_time = boost::chrono::high_resolution_clock::now() - start;
 		std::cout << "    Done in " << elapsed_time.count() << "s" << std::endl;
-
-		//
-		// Load dictionary annotations, obtain neural codes for
-		// dictionary patches and build a FLANN forest for a
-		// subsequent search.
-		//
-		std::cout << "[*] Preparing dictionary..." << std::endl;
-		start = boost::chrono::high_resolution_clock::now();
-
-		std::vector<cv::Mat1f> annotations;
-		LoadDictAnnotations(annotations);
-
-		cv::Mat1f dict;
-		if (fs::exists(kDictPath)) {
-			dict = ReadMatrix(kDictPath);
-		} else {
-			MakeLayerConfigurationForDict(input_configuration, output_configuration);
-
-			DataList input_data_list;
-			LoadDictPatches(input_data_list);
-			DataList output_data_list;
-
-			nnforge::supervised_data_mem_reader reader(
-				input_configuration,
-				output_configuration,
-				input_data_list,
-				output_data_list);
-
-			tester->set_input_configuration_specific(input_configuration);
-			nnforge::output_neuron_value_set_smart_ptr output_ptr = tester->run(
-				reader, 1);
-
-			dict = GetFeaturesMat(output_ptr->neuron_value_list);
-
-			DumpMatrix(dict, kDictPath);
-		}
-
-		FLANNIndexPtr knn_index;
-		if (fs::exists(kKnnIndexPath)) {
-			knn_index.reset(new cv::flann::Index(dict, cv::flann::SavedIndexParams(kKnnIndexPath)));
-		} else {
-			knn_index.reset(new cv::flann::Index(dict, cv::flann::KDTreeIndexParams(4)));
-			knn_index->save(kKnnIndexPath);
-		}
-
-		elapsed_time = boost::chrono::high_resolution_clock::now() - start;
-		std::cout << "    Done in " << elapsed_time.count() << "s" << std::endl;
-
-		if (process_dict_only) {
-			return 0;
-		}
 
 		for (int img_idx = 0; img_idx < images_paths.size(); ++img_idx) {
 			std::cout << "=== Processing image: " << images_paths[img_idx] << std::endl;
@@ -589,38 +479,13 @@ int main(int argc, char* argv[]) {
 			std::cout << "    Done in " << elapsed_time.count() << "s" << std::endl;
 
 			//
-			// Match features against dictionary codes.
-			//
-			std::cout << "[*] Running kNN search..." << std::endl;
-			start = boost::chrono::high_resolution_clock::now();
-
-			int total_pixels = maps[0].total();
-
-			cv::Mat1f dists(cv::Size(1, total_pixels));
-			cv::Mat1i indices(cv::Size(1, total_pixels));
-			{
-				// Convert maps into queries for FLANN.
-				cv::Mat1f queries(cv::Size(maps.size(), total_pixels));
-				for (int map_idx = 0; map_idx < maps.size(); ++map_idx) {
-					maps[map_idx].reshape(0, total_pixels).copyTo(queries.col(map_idx));
-				}
-
-				// Run search.
-				knn_index->knnSearch(queries, indices, dists, 1, cv::flann::SearchParams(32));
-			}
-
-			elapsed_time = boost::chrono::high_resolution_clock::now() - start;
-			test_time += elapsed_time;
-			std::cout << "    Done in " << elapsed_time.count() << "s" << std::endl;
-
-			//
 			// Finally, combine appropriate annotation patches into the output
 			// edge map.
 			//
 			std::cout << "[*] Combining annotation patches..." << std::endl;
 			start = boost::chrono::high_resolution_clock::now();
 
-			cv::Mat1f edges_map = CombinePatches(indices, annotations, maps[0].size());
+			cv::Mat1f edges_map = CombinePatches(maps, maps[0].size());
 
 			elapsed_time = boost::chrono::high_resolution_clock::now() - start;
 			test_time += elapsed_time;
