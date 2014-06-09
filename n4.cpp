@@ -20,14 +20,9 @@ namespace po = boost::program_options;
 namespace fs = boost::filesystem;
 
 typedef std::vector< nnforge_shared_ptr<const std::vector<float> > > DataList;
-typedef nnforge_shared_ptr<cv::flann::Index> FLANNIndexPtr;
 
 const int kNumOutputMaps = 256;
-const char *kDictAnnotationsPath = "./dict_annotations.bin";
-const char *KDictProcessedPatchesPath = "./dict_processed_patches.bin";
-const char *kDictPath = "./dict.bin";
 const char *kWeightsPath = "./weights.bin";
-const char *kKnnIndexPath = "./knn_index.bin";
 
 template<unsigned int index_id> class VectorElementExtractor {
 public:
@@ -82,11 +77,8 @@ cv::Mat3f GetImage(const char *filename, float scale) {
 	// Convert image to the floating-point format.
 	img.convertTo(img, CV_32FC3, 1.0f / 255.0f);
 
-	// Remove excessive pixel from the border. 321 x 481 -> 320 x 480 :).
-	img = img(cv::Range(0, img.rows - 1), cv::Range(0, img.cols - 1)).clone();
-
 	// Subtract mean.
-	img -= cv::Scalar(0.37162688, 0.44378472, 0.43420864);
+	img -= cv::Scalar(0.16073793, 0.27314346, 0.52148472);
 
 	// Scale image.
 	cv::resize(img, img, cv::Size(), scale, scale);
@@ -328,7 +320,7 @@ void GetImagesPaths(const std::string &root, std::vector<std::string> &images_pa
 		fs::directory_iterator endit;
 		while (it != endit) {
 			if (fs::is_regular_file(*it) &&
-				it->path().extension().compare(".jpg") == 0) {
+				it->path().extension().compare(".tif") == 0) {
 
 				images_paths.push_back(fs::absolute(it->path()).string());
 			}
@@ -491,10 +483,12 @@ int main(int argc, char* argv[]) {
 			test_time += elapsed_time;
 			std::cout << "    Done in " << elapsed_time.count() << "s" << std::endl;
 
+//			std::string img_name =
+//				fs::path(images_paths[img_idx]).stem().string() + ".bin";
+//			DumpMatrix(edges_map, (fs::path(target_path) / img_name).c_str());
 			std::string img_name =
-				fs::path(images_paths[img_idx]).stem().string() + ".bin";
-			DumpMatrix(edges_map, (fs::path(target_path) / img_name).c_str());
-//			cv::imwrite((fs::path(target_path) / img_name).c_str(), edges_map * 255.0);
+				fs::path(images_paths[img_idx]).stem().string() + ".png";
+			cv::imwrite((fs::path(target_path) / img_name).c_str(), edges_map * 255.0);
 		}
 
 		std::cout << "=" << std::endl;
