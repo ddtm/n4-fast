@@ -29,12 +29,15 @@ const char *kDictPath = "./dict.bin";
 const char *kWeightsPath = "./weights.bin";
 const char *kKnnIndexPath = "./knn_index.bin";
 
+// Forward declarations.
+cv::Mat1f ReadMatrix(const char *filename);
+
 template<unsigned int index_id> class VectorElementExtractor {
 public:
 	VectorElementExtractor() {
 	}
 
-	inline float operator()(cv::Vec3f x) const {
+	inline float operator()(cv::Vec4f x) const {
 		return x[index_id];
 	}
 };
@@ -45,7 +48,7 @@ nnforge::network_schema_smart_ptr GetSchema() {
 	// Input patch size is 34x34.
 
 	// conv1.
-	schema->add_layer(nnforge::const_layer_smart_ptr(new nnforge::convolution_layer(std::vector<unsigned int>(2, 7), 3, 96))); // 28x28
+	schema->add_layer(nnforge::const_layer_smart_ptr(new nnforge::convolution_layer(std::vector<unsigned int>(2, 7), 4, 96))); // 28x28
 	schema->add_layer(nnforge::const_layer_smart_ptr(new nnforge::rectified_linear_layer()));
 
 	// pool1.
@@ -76,29 +79,34 @@ nnforge::network_schema_smart_ptr GetSchema() {
 	return schema;
 }
 
-cv::Mat3f GetImage(const char *filename, float scale) {
-	cv::Mat img = cv::imread(filename);
+cv::Mat4f GetImage(const char *image_filename,
+				   const char *depth_filename,
+				   float scale) {
+	cv::Mat img = cv::imread(image_filename);
+	cv::Mat depth = ReadMatrix(depth_filename);
 
 	// Convert image to the floating-point format.
 	img.convertTo(img, CV_32FC3, 1.0f / 255.0f);
 
-	// Remove excessive pixel from the border. 321 x 481 -> 320 x 480 :).
-	img = img(cv::Range(0, img.rows - 1), cv::Range(0, img.cols - 1)).clone();
+	// Combine channels into single output.
+	cv::Mat out;
+	cv::Mat in[] = {img, depth};
+	cv::merge(in, 2, out);
 
 	// Subtract mean.
-	img -= cv::Scalar(0.37162688, 0.44378472, 0.43420864);
+	out -= cv::Scalar(0.4007874, 0.42236657, 0.4911259, 0.21501289);
 
 	// Scale image.
-	cv::resize(img, img, cv::Size(), scale, scale);
+	cv::resize(out, out, cv::Size(), scale, scale);
 
 	// Pad image.
-	cv::copyMakeBorder(img, img, 15, 15 + 4, 15, 15 + 4, cv::BORDER_REFLECT);
+	cv::copyMakeBorder(out, out, 15, 15 + 4, 15, 15 + 4, cv::BORDER_REFLECT);
 
-	return img;
+	return out;
 }
 
-void ConvertToInputFormat(cv::Mat3f image, std::vector<float> &input_data) {
-	input_data.resize(image.rows * image.cols * 3);
+void ConvertToInputFormat(cv::Mat4f image, std::vector<float> &input_data) {
+	input_data.resize(image.rows * image.cols * 4);
 
 	// Red.
 	std::transform(
@@ -118,9 +126,16 @@ void ConvertToInputFormat(cv::Mat3f image, std::vector<float> &input_data) {
 		image.end(),
 		input_data.begin() + (image.rows * image.cols * 2),
 		VectorElementExtractor<0U>());
+	// Depth.
+	std::transform(
+		image.begin(),
+		image.end(),
+		input_data.begin() + (image.rows * image.cols * 3),
+		VectorElementExtractor<4U>());
+
 }
 
-void CreateShiftedInputs(const cv::Mat3f img, DataList &input_data_list) {
+void CreateShiftedInputs(const cv::Mat4f img, DataList &input_data_list) {
 	input_data_list.resize(16);
 
 	cv::Size img_size = img.size();
@@ -128,7 +143,7 @@ void CreateShiftedInputs(const cv::Mat3f img, DataList &input_data_list) {
 	int input_idx = 0;
 	for (int y_shift = 0; y_shift < 4; ++y_shift) {
 		for (int x_shift = 0; x_shift < 4; ++x_shift, ++input_idx) {
-			cv::Mat3f roi =
+			cv::Mat4f roi =
 				img(cv::Range(y_shift, y_shift + img_size.height - 4),
 				    cv::Range(x_shift, x_shift + img_size.width - 4));
 
@@ -267,11 +282,11 @@ nnforge::network_tester_smart_ptr SetupTester(int device_id) {
 }
 
 void MakeLayerConfigurationForImage(
-		const cv::Mat3f img,
+		const cv::Mat4f img,
 		nnforge::layer_configuration_specific &input_configuration,
 		nnforge::layer_configuration_specific &output_configuration) {
 
-	input_configuration.feature_map_count = 3;
+	input_configuration.feature_map_count = 4;
 	input_configuration.dimension_sizes.resize(2);
 	input_configuration.dimension_sizes[0] = img.cols - 4;
 	input_configuration.dimension_sizes[1] = img.rows - 4;
@@ -318,7 +333,9 @@ cv::Mat1f ReadMatrix(const char *filename) {
 	return mat;
 }
 
-void GetImagesPaths(const std::string &root, std::vector<std::string> &images_paths) {
+void GetImagesPaths(const std::string &root,
+					std::vector<std::string> &images_paths,
+					std::vector<std::string> &depths_paths) {
 	if (!fs::exists(root)) {
 		return;
 	}
@@ -331,6 +348,10 @@ void GetImagesPaths(const std::string &root, std::vector<std::string> &images_pa
 				it->path().extension().compare(".jpg") == 0) {
 
 				images_paths.push_back(fs::absolute(it->path()).string());
+
+				fs::path depth_path("./depth");
+				depth_path /= fs::path(it->path().stem().string() + ".bin");
+				depths_paths.push_back(depth_path.string());
 			}
 			++it;
 		}
@@ -344,11 +365,19 @@ void GetImagesPaths(const std::string &root, std::vector<std::string> &images_pa
 				continue;
 			}
 			images_paths.push_back(fs::absolute(image_path).string());
+
+			fs::path depth_path("./depth");
+			depth_path /= fs::path(fs::path(image_path).stem().string() + ".bin");
+			depths_paths.push_back(depth_path.string());
 		}
 
 		f.close();
 	} else {
 		images_paths.push_back(root);
+
+		fs::path depth_path("./depth");
+		depth_path /= fs::path(fs::path(root).stem().string() + ".bin");
+		depths_paths.push_back(depth_path.string());
 	}
 }
 
@@ -381,12 +410,13 @@ int main(int argc, char* argv[]) {
 		if (vm.count("source-path")) {
 			source_path = vm["source-path"].as<std::string>();
 		} else {
-			source_path = "/home/yganin/Arbeit/Projects/NN/Segmentation/BSDS500/BSR/BSDS500/data/images/test/3063.jpg";
+			source_path = "/home/yganin/Arbeit/Projects/NN/Segmentation/Datasets/NYU/Source/data/images/test/00000001.jpg";
 		}
 		std::cout << "= Source path: " << source_path << std::endl;
 
 		std::vector<std::string> images_paths;
-		GetImagesPaths(source_path, images_paths);
+		std::vector<std::string> depths_paths;
+		GetImagesPaths(source_path, images_paths, depths_paths);
 
 		std::string target_path;
 		if (vm.count("target-path")) {
@@ -427,7 +457,7 @@ int main(int argc, char* argv[]) {
 			//
 			std::cout << "[*] Creating inputs..." << std::endl;
 
-			cv::Mat3f img = GetImage(images_paths[img_idx].c_str(), image_scale);
+			cv::Mat4f img = GetImage(images_paths[img_idx].c_str(), depths_paths[img_idx].c_str(), image_scale);
 			MakeLayerConfigurationForImage(img, input_configuration, output_configuration);
 
 			start = boost::chrono::high_resolution_clock::now();
@@ -494,6 +524,8 @@ int main(int argc, char* argv[]) {
 			std::string img_name =
 				fs::path(images_paths[img_idx]).stem().string() + ".bin";
 			DumpMatrix(edges_map, (fs::path(target_path) / img_name).c_str());
+
+//			img_name = fs::path(images_paths[img_idx]).stem().string() + ".png";
 //			cv::imwrite((fs::path(target_path) / img_name).c_str(), edges_map * 255.0);
 		}
 

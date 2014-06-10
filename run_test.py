@@ -10,8 +10,8 @@ import scipy.misc
 import scipy.io
 import cv2
 
-DEVNULL = open(os.devnull, 'wb')
-# DEVNULL = None
+# DEVNULL = open(os.devnull, 'wb')
+DEVNULL = None
 
 def read_edges(filename):
     with open(filename, 'rb') as f:
@@ -74,22 +74,22 @@ class Worker(mp.Process):
                     self.list_path, maps_dir, t['scale'], self.device_id), 
                 shell=True, stdout=DEVNULL)
 
-        # Combine edge maps.
-        for image_path in images_list:
-            image_name = os.path.splitext(os.path.basename(image_path))[0]
+        # # Combine edge maps.
+        # for image_path in images_list:
+        #     image_name = os.path.splitext(os.path.basename(image_path))[0]
 
-            img = scipy.misc.imread(image_path)
+        #     img = scipy.misc.imread(image_path)
 
-            for t in maps:
-                map_fullname = os.path.join(
-                    self.target_path, '%g' % t['scale'], '%s.bin' % image_name)
+        #     for t in maps:
+        #         map_fullname = os.path.join(
+        #             self.target_path, '%g' % t['scale'], '%s.bin' % image_name)
 
-                t['path'] = map_fullname
+        #         t['path'] = map_fullname
 
-            edges = combine_maps(self.maps, img.shape[: 2])
+        #     edges = combine_maps(self.maps, img.shape[: 2])
 
-            target_fullname = os.path.join(self.target_path, '%s.png' % image_name)
-            scipy.misc.imsave(target_fullname, edges)
+        #     target_fullname = os.path.join(self.target_path, '%s.png' % image_name)
+        #     scipy.misc.imsave(target_fullname, edges)
 
         return
 
@@ -106,15 +106,15 @@ if __name__ == '__main__':
     if args.images_base_path:
         images_base_path = args.images_base_path
     else:
-        images_base_path = '/home/yganin/Arbeit/Projects/NN/Segmentation/BSDS500/BSR/BSDS500/data/images/test'
+        images_base_path = '/home/yganin/Arbeit/Projects/NN/Segmentation/Datasets/NYU/Source/data/images/test'
 
-    if images_base_path == 'BSDS500':
-        images_base_path = '/home/yganin/Arbeit/Projects/NN/Segmentation/BSDS500/BSR/BSDS500/data/images/test'
+    if images_base_path == 'NYU':
+        images_base_path = '/home/yganin/Arbeit/Projects/NN/Segmentation/Datasets/NYU/Source/data/images/test'
 
     if args.images_list_path:
         images_list_path = args.images_list_path
     else:
-        images_list_path = '/home/yganin/Arbeit/Projects/NN/Segmentation/BSDS500/BSR/BSDS500/data/bsds500_test.txt'
+        images_list_path = '/home/yganin/Arbeit/Projects/NN/Segmentation/Datasets/NYU/Source/data/nyu_test.txt'
 
     if args.target_path:
         target_path = args.target_path
